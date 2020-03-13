@@ -146,6 +146,8 @@ class AppServer(Server):
         tests = []
 
         for test_name in test_names:
+            if not (os.path.isfile(test_name) and os.access(test_name, os.X_OK)):
+                print('Please set executable bit on %s' % test_name)
             runs = test_suite.get_multirun_params(test_name)
             if runs:
                 tests.extend([AppTest(
