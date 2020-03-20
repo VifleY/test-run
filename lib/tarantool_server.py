@@ -2,6 +2,7 @@ import errno
 import gevent
 import glob
 import inspect  # for caller_globals
+import json
 import os
 import os.path
 import re
@@ -32,6 +33,7 @@ from lib.utils import format_process
 from lib.utils import signame
 from lib.utils import warn_unix_socket
 from lib.utils import prefix_each_line
+from lib.options import Options
 from test import TestRunGreenlet, TestExecutionError
 
 
@@ -448,6 +450,9 @@ class TarantoolLog(object):
 
 
 class TarantoolServer(Server):
+
+    SNAPSHOT_DIRECTORY = 'static/snapshots'
+
     default_tarantool = {
         "bin": "tarantool",
         "logfile": "tarantool.log",
@@ -641,6 +646,22 @@ class TarantoolServer(Server):
         if 'test_run_current_test' in caller_globals.keys():
             self.current_test = caller_globals['test_run_current_test']
 
+        self.snapshot_basename = Options().args.snapshot_version
+        if self.snapshot_basename:
+            self.snapshot_name = '{}.snap'.format(self.snapshot_basename)
+            self.snapshot_path = os.path.join(self.testdir, self.SNAPSHOT_DIRECTORY, self.snapshot_name)
+            if not os.path.exists(self.snapshot_path):
+                color_stdout("Snapshot {} have been not found\n".format(self.snapshot_path),
+                            schema='error')
+                raise TarantoolStartError
+                server.kill_current_test()
+        self.disable_schema_upgrade = Options().args.disable_schema_upgrade
+        if self.disable_schema_upgrade and not self.snapshot_basename:
+            color_stdout("option --disable-schema-upgrade depends on --snapshot-version\n",
+                        schema='error')
+            raise TarantoolStartError
+            server.kill_current_test()
+
     def __del__(self):
         self.stop()
 
@@ -727,6 +748,15 @@ class TarantoolServer(Server):
             self.cleanup()
         self.copy_files()
 
+        if self.snapshot_basename:
+            (instance_name, _) = os.path.splitext(os.path.basename(self.script))
+            instance_dir = os.path.join(self.vardir, instance_name)
+            if not os.path.exists(instance_dir):
+                os.mkdir(instance_dir)
+            snapshot_dest = os.path.join(instance_dir, '00000000000000000000.snap')
+            color_log("Copying snapshot {} to {}".format(self.snapshot_name, snapshot_dest))
+            shutil.copy(self.snapshot_path, snapshot_dest)
+
         if self.use_unix_sockets:
             path = os.path.join(self.vardir, self.name + ".socket-admin")
             warn_unix_socket(path)
@@ -767,6 +797,7 @@ class TarantoolServer(Server):
                     if (e.errno == errno.ENOENT):
                         continue
                     raise
+
         shutil.copy('.tarantoolctl', self.vardir)
         shutil.copy(os.path.join(self.TEST_RUN_DIR, 'test_run.lua'),
                     self.vardir)
@@ -776,7 +807,12 @@ class TarantoolServer(Server):
                         self.vardir)
 
     def prepare_args(self, args=[]):
-        return [self.ctl_path, 'start', os.path.basename(self.script)] + args
+        ctl_args = [self.ctl_path, 'start', os.path.basename(self.script)] + args
+        if self.disable_schema_upgrade:
+            auto_upgrade = 'box.error.injection.set("ERRINJ_AUTO_UPGRADE", true)'
+            ctl_args = [self.binary, '-e', auto_upgrade] + ctl_args
+
+        return ctl_args
 
     def pretest_clean(self):
         # Don't delete snap and logs for 'default' tarantool server
@@ -819,6 +855,7 @@ class TarantoolServer(Server):
 
         # redirect stdout from tarantoolctl and tarantool
         os.putenv("TEST_WORKDIR", self.vardir)
+
         self.process = subprocess.Popen(args,
                                         cwd=self.vardir,
                                         stdout=self.log_des,
@@ -860,6 +897,33 @@ class TarantoolServer(Server):
         self.admin.disconnect()
         self.admin = CON_SWITCH[self.tests_type]('localhost', port)
         self.status = 'started'
+
+        # make sure schema is old
+        if self.disable_schema_upgrade:
+            version = self.extract_schema_from_snapshot()
+            conn = AdminConnection('localhost', self.admin.port)
+            current_ver = yaml.safe_load(conn.execute('box.space._schema:get{"version"}'))
+            conn.disconnect()
+            assert(version, current_ver)
+
+    def extract_schema_from_snapshot(self):
+        ctl_args = [self.ctl_path, 'cat', self.snapshot_path,
+                        '--format=json', '--show-system']
+        # Extract schema version, example of record:
+        # {"HEADER":{"lsn":2,"type":"INSERT","timestamp":1584694286.0031},
+        #   "BODY":{"space_id":272,"tuple":["version",2,3,1]}}
+        with open(os.devnull, 'w') as fp:
+            proc = subprocess.Popen(ctl_args, stdout=subprocess.PIPE, stderr=fp)
+            content = proc.stdout.read()
+            proc.wait()
+            for line in content.split('\n'):
+                if line:
+                    json_line = json.loads(line)
+                    t = json_line['BODY']['tuple']
+                    if t[0] == 'version':
+                        return t
+
+        return None
 
     def crash_detect(self):
         if self.crash_expected:

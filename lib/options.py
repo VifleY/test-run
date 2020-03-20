@@ -201,6 +201,20 @@ class Options:
                 help="""Run the server under 'luacov'.
                 Default: false.""")
 
+        parser.add_argument(
+                "--snapshot-version",
+                dest='snapshot_version',
+                default=None,
+                help="""Version of Tarantool snapshot loaded before
+                testing.""")
+
+        parser.add_argument(
+                "--disable-schema-upgrade",
+                dest='disable_schema_upgrade',
+                action="store_true",
+                default=False,
+                help="""Disable schema upgrade on testing with snapshots.""")
+
         # XXX: We can use parser.parse_intermixed_args() on
         # Python 3.7 to understand commands like
         # ./test-run.py foo --exclude bar baz
