@@ -15,6 +15,7 @@ except ImportError:
     from StringIO import StringIO
 
 import lib
+from lib.options import Options
 from lib.colorer import color_stdout
 from lib.utils import non_empty_valgrind_logs
 from lib.utils import print_tail_n
@@ -152,7 +153,7 @@ class Test(object):
             it to stdout.
 
             Returns short status of the test as a string: 'skip', 'pass',
-            'new', or 'fail'. There is also one possible value for
+            'new', 'updated' or 'fail'. There is also one possible value for
             short_status, 'disabled', but it returned in the caller,
             TestSuite.run_test().
         """
@@ -235,9 +236,20 @@ class Test(object):
         elif (self.is_executed_ok and not
               self.is_equal_result and not
               os.path.isfile(self.result)) and not is_tap:
+            if lib.Options().args.update_result:
+                shutil.copy(self.tmp_result, self.result)
+                short_status = 'new'
+                color_stdout("[ new ]\n", schema='test_new')
+            else:
+                short_status = 'fail'
+                color_stdout("[ fail ]\n", schema='test_fail')
+        elif (self.is_executed_ok and
+              not self.is_equal_result and
+              os.path.isfile(self.result) and
+              lib.Options().args.update_result):
             shutil.copy(self.tmp_result, self.result)
-            short_status = 'new'
-            color_stdout("[ new ]\n", schema='test_new')
+            short_status = 'updated'
+            color_stdout("[ updated ]\n", schema='test_new')
         else:
             has_result = os.path.exists(self.tmp_result)
             if has_result:
@@ -256,7 +268,8 @@ class Test(object):
                 server.print_log(15)
                 where = ": test execution aborted, reason " \
                         "'{0}'".format(diagnostics)
-            elif not self.is_crash_reported and not self.is_equal_result:
+            elif (not self.is_crash_reported and not self.is_equal_result and
+                not lib.Options().args.update_result):
                 self.print_unidiff()
                 server.print_log(15)
                 where = ": wrong test output"
