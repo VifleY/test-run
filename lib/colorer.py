@@ -221,10 +221,14 @@ class Colorer(object):
 
     def writeout_unidiff(self, diff):
         for i in diff:
-            if i.startswith('+'):
+            if i.startswith('+++'):
                 self.write(i, schema='diff_in')
-            elif i.startswith('-'):
+            elif i.startswith('---'):
                 self.write(i, schema='diff_out')
+            elif i.startswith('+'):
+                self.write(repr(i), schema='diff_in')
+            elif i.startswith('-'):
+                self.write(repr(i), schema='diff_out')
             elif i.startswith('@'):
                 self.write(i, schema='diff_mark')
             else:
